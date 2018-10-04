@@ -17,7 +17,7 @@
 #include <ifaddrs.h>
 #include "libnet-headers.h"
 
-void send(pcap_t *handle,libnet_eth_arp_hdr *etharp_hdr,libnet_eth_arp_hdr *recv_etharp_hdr, char mode, u_int8_t* mac_addr, u_int8_t* v_mac_addr, u_int8_t * local_ip, u_int8_t* snd_ip, u_int8_t* trgt_ip)
+void send(pcap_t *handle,u_char * packet,libnet_eth_arp_hdr *etharp_hdr,libnet_eth_arp_hdr *recv_etharp_hdr, char mode, u_int8_t* mac_addr, u_int8_t* v_mac_addr, u_int8_t * local_ip, u_int8_t* snd_ip, u_int8_t* trgt_ip)
 {
 
   u_int8_t BROAD[6]={0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
@@ -41,11 +41,11 @@ void send(pcap_t *handle,libnet_eth_arp_hdr *etharp_hdr,libnet_eth_arp_hdr *recv
     memcpy(etharp_hdr -> ar_trgt_mac, NONE, sizeof(NONE));
     memcpy(etharp_hdr -> ar_trgt_ip, snd_ip, sizeof(snd_ip));
 	
-    u_char *packet=(u_char*)malloc(sizeof(libnet_eth_arp_hdr));
+    
   memcpy(packet,(const u_char*)etharp_hdr,sizeof(libnet_eth_arp_hdr));
 	}
 
-  if(m == 'p')
+  else if(m == 'p')
   {
   memcpy(recv_etharp_hdr -> ether_dhost, v_mac_addr, sizeof(v_mac_addr));
   memcpy(recv_etharp_hdr -> ether_shost, mac_addr, sizeof(mac_addr));
@@ -60,16 +60,10 @@ void send(pcap_t *handle,libnet_eth_arp_hdr *etharp_hdr,libnet_eth_arp_hdr *recv
   memcpy(recv_etharp_hdr -> ar_trgt_mac, v_mac_addr, sizeof(v_mac_addr));
   memcpy(recv_etharp_hdr -> ar_trgt_ip, snd_ip, sizeof(snd_ip));
 
-  u_char *packet=(u_char*)malloc(sizeof(libnet_eth_arp_hdr));
   memcpy(packet,(const u_char*)recv_etharp_hdr,sizeof(libnet_eth_arp_hdr));
 }
 
   
-  
-
-  u_char *packet=(u_char*)malloc(sizeof(libnet_eth_arp_hdr));
-  memcpy(packet,(const u_char*)etharp_hdr,sizeof(libnet_eth_arp_hdr));
-
   for(int i=0; i < sizeof(libnet_eth_arp_hdr); i++)
   {
   	printf("%02x ", packet[i]);
@@ -91,13 +85,88 @@ void send(pcap_t *handle,libnet_eth_arp_hdr *etharp_hdr,libnet_eth_arp_hdr *recv
   }
   if(m == 'p')
   {
-  	printf("succeed");
+  	printf("succeed\n");
   }
   }
-  free(packet);
-  free(etharp_hdr);
+  
 
 }
+
+void recv(pcap_t * handle,libnet_eth_arp_hdr *etharp_hdr,libnet_eth_arp_hdr *recv_etharp_hdr,u_int8_t * v_mac_addr)
+{
+	int cnt = 0;
+  while (true) {
+    struct pcap_pkthdr* header;
+    const u_char* packet;
+    int res = pcap_next_ex(handle, &header, &packet);
+    if (res == 0) continue;
+    if (res == -1 || res == -2) break;
+    const u_char* p;
+    p = packet;
+    recv_etharp_hdr = (struct libnet_eth_arp_hdr *) p;
+    if(recv_etharp_hdr -> ether_type == ntohs(ETHERTYPE_ARP) && recv_etharp_hdr -> ar_op == ntohs(ARPOP_REPLY) )
+    {
+    	for(int i=0;i<4;i++){
+    		if(recv_etharp_hdr -> ar_snd_ip[i] != etharp_hdr -> ar_trgt_ip[i])
+    			cnt++;
+    	}
+    	if(cnt == 0)
+    	{
+    		printf("%u bytes captured...\n", header->caplen);
+    		memcpy(v_mac_addr,recv_etharp_hdr -> ar_snd_mac, sizeof(recv_etharp_hdr -> ar_snd_mac));
+
+    		break;
+    	}
+    }
+  }
+}
+
+void getmac(u_int8_t* mac_addr, char *argv[1])
+{
+	char path[64] = "/sys/class/net/";
+  char str[32];
+  strcat(path, argv[1]);
+  strcat(path,"/address");
+
+  FILE *fp;
+ 
+  if(fp = fopen(path, "r")){
+  	fgets(str,32,fp);
+  	fclose(fp);
+  }
+
+  sscanf(str, "%x:%x:%x:%x:%x:%x",
+           &mac_addr[0],
+           &mac_addr[1],
+           &mac_addr[2],
+           &mac_addr[3],
+           &mac_addr[4],
+           &mac_addr[5]);
+}
+void getip(u_int8_t* local_ip, char *argv[1])
+{
+	struct ifaddrs *addrs, *tmp;
+  getifaddrs(&addrs);
+  
+  tmp = addrs;
+
+
+while (tmp) 
+{
+    if (tmp->ifa_addr && tmp->ifa_addr->sa_family == AF_INET)
+    {
+        struct sockaddr_in *pAddr = (struct sockaddr_in *)tmp->ifa_addr;
+        if((strcmp(tmp->ifa_name ,argv[1]))==0){
+        	memcpy(local_ip, &pAddr->sin_addr, sizeof(pAddr->sin_addr));
+        }
+    }
+    tmp = tmp->ifa_next;
+}
+
+freeifaddrs(addrs);
+}
+
+
 
 void usage() {
   printf("syntax: send_arp <interface> <send ip> <target ip>\n");
@@ -121,34 +190,15 @@ int main(int argc, char* argv[]) {
   u_int8_t v_mac_addr[ETHER_ADDR_LEN];
   char mode;
 
+  	u_char *packet=(u_char*)malloc(sizeof(libnet_eth_arp_hdr));
   	struct libnet_eth_arp_hdr * etharp_hdr = (libnet_eth_arp_hdr*)malloc(sizeof(libnet_eth_arp_hdr));
 	struct libnet_eth_arp_hdr * recv_etharp_hdr = (libnet_eth_arp_hdr*)malloc(sizeof(libnet_eth_arp_hdr));
 
   
-  struct ifaddrs *addrs, *tmp;
-  getifaddrs(&addrs);
-  
-  tmp = addrs;
 
+  getip(local_ip, argv);
+  getmac(mac_addr, argv);
 
-while (tmp) 
-{
-    if (tmp->ifa_addr && tmp->ifa_addr->sa_family == AF_INET)
-    {
-        struct sockaddr_in *pAddr = (struct sockaddr_in *)tmp->ifa_addr;
-        if((strcmp(tmp->ifa_name ,argv[1]))==0){
-        	memcpy(local_ip, &pAddr->sin_addr, sizeof(pAddr->sin_addr));
-        }
-    }
-    tmp = tmp->ifa_next;
-}
-
-freeifaddrs(addrs);
-  
-  char path[64] = "/sys/class/net/";
-  char str[32];
-  strcat(path, argv[1]);
-  strcat(path,"/address");
 
   char* dev = argv[1];
   char errbuf[PCAP_ERRBUF_SIZE];
@@ -158,57 +208,18 @@ freeifaddrs(addrs);
     return -1;
   }
 
-  
-  FILE *fp;
- 
-  if(fp = fopen(path, "r")){
-  	fgets(str,32,fp);
-  	fclose(fp);
-  }
-
-  sscanf(str, "%x:%x:%x:%x:%x:%x",
-           &mac_addr[0],
-           &mac_addr[1],
-           &mac_addr[2],
-           &mac_addr[3],
-           &mac_addr[4],
-           &mac_addr[5]);
-
 
   mode = 'q';
-  send(handle,etharp_hdr,recv_etharp_hdr, mode, mac_addr, v_mac_addr, local_ip, snd_ip, trgt_ip);
+  send(handle,packet,etharp_hdr,recv_etharp_hdr, mode, mac_addr, v_mac_addr, local_ip, snd_ip, trgt_ip);
+  recv(handle, etharp_hdr, recv_etharp_hdr, v_mac_addr);
   
-
-  int cnt = 0;
-  while (true) {
-    struct pcap_pkthdr* header;
-    const u_char* packet;
-    int res = pcap_next_ex(handle, &header, &packet);
-    if (res == 0) continue;
-    if (res == -1 || res == -2) break;
-    const u_char* p;
-    p = packet;
-    recv_etharp_hdr = (struct libnet_eth_arp_hdr *) p;
-    if(recv_etharp_hdr -> ether_type == ntohs(ETHERTYPE_ARP) && recv_etharp_hdr -> ar_op == ntohs(ARPOP_REPLY) )
-    {
-    	for(int i=0;i<4;i++){
-    		if(recv_etharp_hdr -> ar_snd_ip[i] != etharp_hdr -> ar_trgt_ip[i])
-    			cnt++;
-    	}
-    	if(cnt == 0)
-    	{
-    		printf("%u bytes captured...\n", header->caplen);
-    		memcpy(v_mac_addr,recv_etharp_hdr -> ar_snd_mac, sizeof(recv_etharp_hdr -> ar_snd_mac));
-    		break;
-    	}
-    }
-  }
-
   mode = 'p';
-  send(handle,etharp_hdr,recv_etharp_hdr, mode, mac_addr, v_mac_addr, local_ip, snd_ip, trgt_ip);
- 
-
-  
+  send(handle,packet,etharp_hdr,recv_etharp_hdr, mode, mac_addr, v_mac_addr, local_ip, snd_ip, trgt_ip);
   pcap_close(handle);
+  
+  free(etharp_hdr);
+  free(recv_etharp_hdr);
+  free(packet);
+
   return 0;
 }
